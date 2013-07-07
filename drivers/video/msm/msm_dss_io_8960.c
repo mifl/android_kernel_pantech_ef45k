@@ -650,11 +650,13 @@ void mipi_dsi_ahb_ctrl(u32 enable)
 
 void mipi_dsi_clk_enable(void)
 {
+	
 	u32 pll_ctrl = MIPI_INP(MIPI_DSI_BASE + 0x0200);
 	if (mipi_dsi_clk_on) {
 		pr_info("%s: mipi_dsi_clks already ON\n", __func__);
 		return;
 	}
+
 	MIPI_OUTP(MIPI_DSI_BASE + 0x0200, pll_ctrl | 0x01);
 	mipi_dsi_phy_rdy_poll();
 

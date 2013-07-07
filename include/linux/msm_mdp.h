@@ -73,10 +73,28 @@
 #define MSMFB_METADATA_SET  _IOW(MSMFB_IOCTL_MAGIC, 162, struct msmfb_metadata)
 #define MSMFB_OVERLAY_COMMIT      _IOW(MSMFB_IOCTL_MAGIC, 163, unsigned int)
 
+#ifdef CONFIG_F_SKYDISP_LCD_RESET
+#define MSMFB_SKY_LCD_RESET_INIT    _IOW(MSMFB_IOCTL_MAGIC, 200, unsigned int)
+#endif
+#ifdef CONFIG_F_SKYDISP_LCD_FORCE_ONOFF 
+#define MSMFB_SKY_LCD_FORCE_ONOFF   _IOW(MSMFB_IOCTL_MAGIC, 201, unsigned int)
+#endif
+
+#ifdef CONFIG_F_SKYDISP_SMART_DIMMING 
+#define MSMFB_SKY_LCD_SMART_DIMMING_READ   _IOW(MSMFB_IOCTL_MAGIC, 202, char)
+#define MSMFB_SKY_LCD_SMART_DIMMING_WRITE  _IOW(MSMFB_IOCTL_MAGIC, 203, char)
+#endif
+
+#ifdef CONFIG_F_SKYDISP_VEIL_VIEW
+#define MSMFB_SKY_VEIL_ENABLE       _IOW(MSMFB_IOCTL_MAGIC, 204,   struct msmfb_veil_view)
+#define MSMFB_SKY_VEIL_SET          _IOW(MSMFB_IOCTL_MAGIC, 205,   struct msmfb_veil_view)
+#endif
 #define FB_TYPE_3D_PANEL 0x10101010
 #define MDP_IMGTYPE2_START 0x10000
 #define MSMFB_DRIVER_VERSION	0xF9E8D701
-
+/* PLM 1430  kangms p14974 130215 */
+#define CONFIG_QUALCOMM_BUG_FIX_BLENDING_INC
+#define CONFIG_QUALCOMMM_FLOATINGPIPE_BUG_FIX
 enum {
 	NOTIFY_UPDATE_START,
 	NOTIFY_UPDATE_STOP,
@@ -483,6 +501,25 @@ struct msmfb_mdp_pp {
 	} data;
 };
 
+#if defined(CONFIG_QUALCOMM_BUG_FIX_BLENDING_INC)
+enum {
+	metadata_op_none,
+	metadata_op_base_blend,
+	metadata_op_max
+};
+
+struct mdp_blend_cfg {
+	uint32_t is_premultiplied;
+};
+
+struct msmfb_metadata {
+	uint32_t op;
+	uint32_t flags;
+	union {
+		struct mdp_blend_cfg blend_cfg;
+	} data;
+};
+#endif
 
 struct mdp_page_protection {
 	uint32_t page_protection;
@@ -496,9 +533,11 @@ struct mdp_mixer_info {
 	int mixer_num;
 	int z_order;
 };
-
+#ifdef CONFIG_QUALCOMMM_FLOATINGPIPE_BUG_FIX
+#define MAX_PIPE_PER_MIXER  5
+#else
 #define MAX_PIPE_PER_MIXER  4
-
+#endif
 struct msmfb_mixer_info_req {
 	int mixer_num;
 	int cnt;
@@ -509,6 +548,16 @@ enum {
 	DISPLAY_SUBSYSTEM_ID,
 	ROTATOR_SUBSYSTEM_ID,
 };
+
+#ifdef CONFIG_F_SKYDISP_VEIL_VIEW
+struct msmfb_veil_view {
+    uint32_t lut;
+    uint32_t tex;
+    uint32_t map;
+    uint32_t size;
+    uint32_t rot;
+};
+#endif
 
 #ifdef __KERNEL__
 

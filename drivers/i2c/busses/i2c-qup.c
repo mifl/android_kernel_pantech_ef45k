@@ -170,6 +170,10 @@ struct qup_i2c_dev {
 	int                          i2c_gpios[ARRAY_SIZE(i2c_rsrcs)];
 };
 
+#if defined(T_OSCAR)
+#define EXIT_LOOP_VAL	100
+#endif
+
 #ifdef DEBUG
 static void
 qup_print_status(struct qup_i2c_dev *dev)
@@ -329,13 +333,13 @@ qup_i2c_pwr_mgmt(struct qup_i2c_dev *dev, unsigned int state)
 	if (state != 0) {
 		clk_enable(dev->clk);
 		if (!dev->pdata->keep_ahb_clk_on)
-			clk_enable(dev->pclk);
+		clk_enable(dev->pclk);
 	} else {
 		qup_update_state(dev, QUP_RESET_STATE);
 		clk_disable(dev->clk);
 		qup_config_core_on_en(dev);
 		if (!dev->pdata->keep_ahb_clk_on)
-			clk_disable(dev->pclk);
+		clk_disable(dev->pclk);
 	}
 }
 
@@ -756,6 +760,9 @@ qup_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	long timeout;
 	int err;
 
+#if defined(T_OSCAR)
+	int exit_infinite_loop_cnt = 0;
+#endif
 	del_timer_sync(&dev->pwr_timer);
 	mutex_lock(&dev->mlock);
 
@@ -1012,7 +1019,21 @@ timeout_err:
 					if (i % 2 == 0) {
 						if ((rd_status &
 							QUP_IN_NOT_EMPTY) == 0)
+#if defined(T_OSCAR)
+						{
+							if (dev->err_irq == GSBI9_QUP_IRQ)
+							{
+								exit_infinite_loop_cnt++;
+								dev_dbg(dev->dev, "sayuss GSBI # dev->err_irq = 0x%x\n",dev->err_irq);
+								if( EXIT_LOOP_VAL < exit_infinite_loop_cnt )
+									goto	out_err;
+							}
 							break;
+						}
+#else
+							break;
+#endif
+						
 						dval = readl_relaxed(dev->base +
 							QUP_IN_FIFO_BASE);
 						dev->msg->buf[dev->pos] =
@@ -1403,8 +1424,8 @@ qup_i2c_remove(struct platform_device *pdev)
 	i2c_del_adapter(&dev->adapter);
 	clk_unprepare(dev->clk);
 	if (!dev->pdata->keep_ahb_clk_on) {
-		clk_unprepare(dev->pclk);
-		clk_put(dev->pclk);
+	clk_unprepare(dev->pclk);
+	clk_put(dev->pclk);
 	}
 	clk_put(dev->clk);
 	qup_i2c_free_gpios(dev);
@@ -1443,7 +1464,7 @@ static int qup_i2c_suspend(struct device *device)
 		qup_i2c_pwr_mgmt(dev, 0);
 	clk_unprepare(dev->clk);
 	if (!dev->pdata->keep_ahb_clk_on)
-		clk_unprepare(dev->pclk);
+	clk_unprepare(dev->pclk);
 	qup_i2c_free_gpios(dev);
 	return 0;
 }
@@ -1455,7 +1476,7 @@ static int qup_i2c_resume(struct device *device)
 	BUG_ON(qup_i2c_request_gpios(dev) != 0);
 	clk_prepare(dev->clk);
 	if (!dev->pdata->keep_ahb_clk_on)
-		clk_prepare(dev->pclk);
+	clk_prepare(dev->pclk);
 	dev->suspended = 0;
 	return 0;
 }

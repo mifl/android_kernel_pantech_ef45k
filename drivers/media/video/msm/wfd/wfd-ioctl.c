@@ -1142,11 +1142,11 @@ static int wfdioc_s_parm(struct file *filp, void *fh,
 		venc_mode = VENC_MODE_CFR;
 	}
 
-	rc = v4l2_subdev_call(&wfd_dev->vsg_sdev, core,
+		rc = v4l2_subdev_call(&wfd_dev->vsg_sdev, core,
 			ioctl, VSG_SET_MODE, &vsg_mode);
 	if (rc) {
 		WFD_MSG_ERR("Setting FR mode for VSG failed\n");
-		goto set_parm_fail;
+			goto set_parm_fail;
 	}
 
 	rc = v4l2_subdev_call(&wfd_dev->enc_sdev, core,
@@ -1154,7 +1154,7 @@ static int wfdioc_s_parm(struct file *filp, void *fh,
 			&venc_mode);
 	if (rc) {
 		WFD_MSG_ERR("Setting FR mode for VENC failed\n");
-		goto set_parm_fail;
+			goto set_parm_fail;
 	}
 
 set_parm_fail:

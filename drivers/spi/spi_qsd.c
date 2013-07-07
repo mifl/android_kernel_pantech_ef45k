@@ -1975,8 +1975,8 @@ skip_dma_resources:
 
 		dd->use_rlock = 1;
 		dd->pm_lat = pdata->pm_lat;
-		pm_qos_add_request(&qos_req_list, PM_QOS_CPU_DMA_LATENCY,
-					PM_QOS_DEFAULT_VALUE);
+		pm_qos_add_request(&qos_req_list, PM_QOS_CPU_DMA_LATENCY, 
+					    	 PM_QOS_DEFAULT_VALUE);
 	}
 
 	mutex_lock(&dd->core_lock);

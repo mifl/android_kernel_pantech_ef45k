@@ -623,9 +623,9 @@ static int gaudio_open_snd_dev(struct gaudio *card)
 		return -EINVAL;
 	}
 
-	pcm_file = snd->filp->private_data;
-	snd->substream = pcm_file->substream;
-	snd->card = card;
+		pcm_file = snd->filp->private_data;
+		snd->substream = pcm_file->substream;
+		snd->card = card;
 	res = capture_default_hw_params(snd);
 
 	if (res)

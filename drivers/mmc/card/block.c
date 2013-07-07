@@ -128,9 +128,9 @@ struct mmc_blk_data {
 static DEFINE_MUTEX(open_lock);
 
 enum {
-	MMC_PACKED_N_IDX = -1,
-	MMC_PACKED_N_ZERO,
-	MMC_PACKED_N_SINGLE,
+        MMC_PACKED_N_IDX = -1,
+        MMC_PACKED_N_ZERO,
+        MMC_PACKED_N_SINGLE,
 };
 
 module_param(perdev_minors, int, 0444);
@@ -138,8 +138,8 @@ MODULE_PARM_DESC(perdev_minors, "Minors numbers to allocate per device");
 
 static inline void mmc_blk_clear_packed(struct mmc_queue_req *mqrq)
 {
-	mqrq->packed_cmd = MMC_PACKED_NONE;
-	mqrq->packed_num = MMC_PACKED_N_ZERO;
+        mqrq->packed_cmd = MMC_PACKED_NONE;
+        mqrq->packed_num = MMC_PACKED_N_ZERO;
 }
 
 static struct mmc_blk_data *mmc_blk_get(struct gendisk *disk)
@@ -1802,7 +1802,7 @@ static int mmc_blk_cmd_err(struct mmc_blk_data *md, struct mmc_card *card,
 	} else {
 		if (mq_rq->packed_cmd == MMC_PACKED_NONE)
 			ret = blk_end_request(req, 0, brq->data.bytes_xfered);
-	}
+		}
 	return ret;
 }
 
@@ -2016,7 +2016,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 					blk_rq_cur_bytes(req));
 	} else {
 		mmc_blk_abort_packed_req(mq_rq);
-	}
+		}
 
  start_new_req:
 	if (rqc) {
@@ -2404,9 +2404,9 @@ bkops_check_threshold_fails:
 num_wr_reqs_to_start_packing_fail:
 	device_remove_file(disk_to_dev(md->disk), &md->power_ro_lock);
 power_ro_lock_fail:
-	device_remove_file(disk_to_dev(md->disk), &md->force_ro);
+		device_remove_file(disk_to_dev(md->disk), &md->force_ro);
 force_ro_fail:
-	del_gendisk(md->disk);
+		del_gendisk(md->disk);
 
 	return ret;
 }

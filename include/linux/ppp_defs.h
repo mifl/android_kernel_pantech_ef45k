@@ -12,6 +12,9 @@
 #ifndef _PPP_DEFS_H_
 #define _PPP_DEFS_H_
 
+// 2012.12.22 P10902 min.seungjae add for build
+#define PPP_MTU 1500  
+
 /*
  * The basic PPP frame.
  */

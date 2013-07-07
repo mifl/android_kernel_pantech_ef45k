@@ -145,6 +145,15 @@ static void free_fib_info_rcu(struct rcu_head *head)
 {
 	struct fib_info *fi = container_of(head, struct fib_info, rcu);
 
+//#ifdef FEATURE_SKY_DS_KERNEL_CRASH_CR_01155420_FROM_OSCAR_JB
+	change_nexthops(fi) {
+		if (nexthop_nh->nh_dev)
+			dev_put(nexthop_nh->nh_dev);
+	} endfor_nexthops(fi);
+
+	release_net(fi->fib_net);
+//#endif /* FEATURE_SKY_DS_KERNEL_CRASH_CR_01155420_FROM_OSCAR_JB */
+	
 	if (fi->fib_metrics != (u32 *) dst_default_metrics)
 		kfree(fi->fib_metrics);
 	kfree(fi);
@@ -156,13 +165,18 @@ void free_fib_info(struct fib_info *fi)
 		pr_warn("Freeing alive fib_info %p\n", fi);
 		return;
 	}
+//#ifdef FEATURE_SKY_DS_KERNEL_CRASH_CR_01155420_FROM_OSCAR_JB
+/* block original	
 	change_nexthops(fi) {
 		if (nexthop_nh->nh_dev)
 			dev_put(nexthop_nh->nh_dev);
 		nexthop_nh->nh_dev = NULL;
 	} endfor_nexthops(fi);
+*/	
 	fib_info_cnt--;
+/* block original	
 	release_net(fi->fib_net);
+*/	
 	call_rcu(&fi->rcu, free_fib_info_rcu);
 }
 

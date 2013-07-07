@@ -48,11 +48,22 @@
 #include "tvenc.h"
 #include "mdp.h"
 #include "mdp4.h"
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+#include "mipi_samsung_octa.h"
+#endif
 
+#ifdef CONFIG_PANTECH_MHL_SUSPEND_RESUME
+extern int mhl_power_ctrl(int on);
+extern int mhl_gpio_request(void);
+extern void mhl_gpio_free(void);
+#endif
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MSM_FB_NUM	3
 #endif
 
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+int dont_free_pipe_while_sub_blank_force=0;
+#endif
 static unsigned char *fbram;
 static unsigned char *fbram_phys;
 static int fbram_size;
@@ -62,6 +73,37 @@ static boolean bf_supported;
  * transients during resume.
  */
 unsigned long backlight_duration = (HZ/20);
+
+
+#if defined(CONFIG_MACH_MSM8960_EF45K) || defined(CONFIG_MACH_MSM8960_EF46L) ||\
+	defined (CONFIG_MACH_MSM8960_EF47S)
+int charger_flag =0;
+#elif defined(CONFIG_MACH_MSM8960_STARQ)
+unsigned char first_boot_flags = 1; /* offline charging */
+#endif
+
+
+#ifdef CONFIG_PANTECH_CHARGER_OFFLINE
+extern uint32_t pantech_charging_status(void);
+#define BATT_CHARGING_IN "/poweroff_in.rle"
+#endif
+
+#ifdef CONFIG_F_SKYDISP_SMART_DIMMING
+extern void mtp_write(void);
+#endif
+
+
+
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT //silent boot p13832@shji 		
+#include "../../../arch/arm/mach-msm/sky_sys_reset.h"
+int backlight_value = 0;
+#endif
+
+//#ifndef CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN
+#if (!defined(CONFIG_MACH_MSM8960_STARQ) || !defined (CONFIG_MACH_MSM8960_OSCAR)) && \
+    !defined(CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN)
+#define CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN
+#endif
 
 static struct platform_device *pdev_list[MSM_FB_MAX_DEV_LIST];
 static int pdev_list_cnt;
@@ -95,7 +137,9 @@ u32 mddi_msg_level = 5;
 
 extern int32 mdp_block_power_cnt[MDP_MAX_BLOCK];
 extern unsigned long mdp_timer_duration;
-
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+extern void mipi_oscar_sec_lcd_on(struct msm_fb_data_type *mfd);
+#endif
 static int msm_fb_register(struct msm_fb_data_type *mfd);
 static int msm_fb_open(struct fb_info *info, int user);
 static int msm_fb_release(struct fb_info *info, int user);
@@ -115,6 +159,16 @@ static int msm_fb_mmap(struct fb_info *info, struct vm_area_struct * vma);
 static int mdp_bl_scale_config(struct msm_fb_data_type *mfd,
 						struct mdp_bl_scale_data *data);
 static void msm_fb_scale_bl(__u32 *bl_lvl);
+static void msm_fb_fillrect(struct fb_info *info, const struct fb_fillrect *rect);
+
+#if defined(CONFIG_F_SKYDISP_LCD_FORCE_ONOFF)
+static int msm_fb_blank_sub_force(int blank_mode, struct fb_info *info, int bl);
+#endif
+
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+extern void mipi_rohm_veil_mode(boolean enable);
+extern int mipi_rohm_veil_set(struct msmfb_veil_view veil);
+#endif
 
 #ifdef MSM_FB_ENABLE_DBGFS
 
@@ -153,6 +207,12 @@ void msm_fb_debugfs_file_create(struct dentry *root, const char *name,
 	    debugfs_create_u32(name, S_IRUGO | S_IWUSR, root, var);
 }
 #endif
+#ifdef CONFIG_F_SKYDISP_NO_CURSOR_IN_BOOT
+int msm_fb_cursor_dummy(struct fb_info *info, struct fb_cursor *cursor)
+{
+	return 0;
+}
+#endif
 
 int msm_fb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 {
@@ -174,6 +234,12 @@ static void msm_fb_set_bl_brightness(struct led_classdev *led_cdev,
 {
 	struct msm_fb_data_type *mfd = dev_get_drvdata(led_cdev->dev->parent);
 	int bl_lvl;
+
+#if !defined(FEATURE_AARM_RELEASE_MODE) //not user mode
+//	printk("[%s:ENTER] led_brightness value : %d \n",__func__,value);
+	//printk("[MSMFB] LED val : %d \n",value);
+#endif
+	printk("[MSMFB] LED val : %d \n",value);
 
 	if (value > MAX_BACKLIGHT_BRIGHTNESS)
 		value = MAX_BACKLIGHT_BRIGHTNESS;
@@ -255,7 +321,185 @@ int msm_fb_detect_client(const char *name)
 
 	return ret;
 }
+#ifndef CONFIG_F_SKYDISP_LCD_FACTORY_REQUEST
+static ssize_t msm_fb_check_panel_power_on(struct device *dev,
+                                          struct device_attribute *attr, char *buf)
+{
+        ssize_t ret = 0;
+        struct fb_info *fbi = dev_get_drvdata(dev);
+        struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
 
+        ret = snprintf(buf, PAGE_SIZE, "%d\n", mfd->panel_power_on);
+
+        return ret;
+}
+#endif
+
+#ifdef CONFIG_F_SKYDISP_CABC_FIX
+int cabc_state;
+int cabc_state_ret;
+extern void cabc_contol(struct msm_fb_data_type *mfd, int state);
+
+static ssize_t msm_fb_cabc_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+
+	sscanf(buf, "%du", &cabc_state);
+
+	
+	if(cabc_state == true)
+		cabc_contol(mfd,true);//off
+	else if(cabc_state == false)
+		cabc_contol(mfd,false);//on
+
+	
+	return count;
+}
+static ssize_t msm_fb_cabc_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+	*buf = 0; 
+	if(cabc_state == 0)
+		cabc_state_ret =1;
+	else if(cabc_state == 1)
+		cabc_state_ret =0; //cabc bug
+	return sprintf(buf, "%d\n", cabc_state_ret);
+
+}
+
+#endif
+#ifdef CONFIG_LCD_DRIVER_STABILITY
+static char *mode;
+static ssize_t msm_fb_sleepNwakeup_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+	struct msm_fb_panel_data *pdata =
+		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	int nBufSize=0;
+
+	if(buf!=NULL)
+	{
+		nBufSize=strlen(buf);
+		if(strncmp(buf, "sleep", 5)==0 && nBufSize == 6)
+		{
+			if(pdata->off){
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				Oscar_State.backlight_cnt = false;
+#endif
+
+				msm_fb_blank_sub(FB_BLANK_POWERDOWN, fbi, true);
+				mode ="sleep";
+			}else{
+				mode ="sleep squence is not registered";
+			}
+		}
+		else if(strncmp(buf, "wakeup", 6)==0 && nBufSize == 7)
+		{
+			if(pdata->on){
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				Oscar_State.backlight_cnt = true;
+#endif
+
+				msm_fb_blank_sub(FB_BLANK_UNBLANK, fbi, true);
+				mode ="wakeup";
+			}else{
+				mode ="wakeup squence is not registered";
+			}
+		}
+		else{
+			
+			mode ="wrong_cmd";
+		}
+	}
+	
+	return nBufSize;
+}
+static ssize_t msm_fb_sleepNwakeup_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", mode);
+
+}
+#endif
+#ifdef CONFIG_F_SKYDISP_ACL_FOR_AMOLED
+static int acl_state;
+static int acl_dat;
+
+extern void acl_contol(struct msm_fb_data_type *mfd, int state);
+extern void acl_data(struct msm_fb_data_type *mfd, int data);
+
+static ssize_t msm_fb_acl_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+
+	sscanf(buf, "%du", &acl_state);
+	if(acl_state == true)
+		acl_contol(mfd, true);
+	else if(acl_state == false)
+		acl_contol(mfd, false);
+	else
+		return -1;
+
+	return count;
+}
+static ssize_t msm_fb_acl_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+
+	return sprintf(buf, "%d\n", acl_state);
+
+}
+
+//data
+static ssize_t msm_fb_acl_data_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+
+	sscanf(buf, "%du", &acl_dat);
+	acl_data(mfd, acl_dat);
+	pr_info("acl_dat = %d",acl_dat);
+	return count;
+}
+static ssize_t msm_fb_acl_data_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+
+	return sprintf(buf, "%d\n", acl_dat);
+
+}
+#endif
+#ifdef CONFIG_ACL_FOR_RECOVERY
+static int recovery_state;
+static ssize_t msm_fb_recovery_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	sscanf(buf, "%du", &recovery_state);
+	if(recovery_state == true)		
+		Oscar_State.backlight_cnt = true;	
+	else		
+		Oscar_State.backlight_cnt = false;	
+
+	printk("backlight_cnt = %d\n",Oscar_State.backlight_cnt);
+	return count;	
+}
+
+static ssize_t msm_fb_recovery_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+
+	return sprintf(buf, "%d\n", recovery_state);
+
+}
+
+#endif
 static ssize_t msm_fb_msm_fb_type(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
@@ -309,10 +553,61 @@ static ssize_t msm_fb_msm_fb_type(struct device *dev,
 
 	return ret;
 }
+#ifdef CONFIG_F_SKYDISP_FORCE_ENCRYPTION_OFF
+int msm_fb_encryption_cnt = 0;
+static ssize_t msm_fb_encryption_show(struct device *dev,
+					  struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", msm_fb_encryption_cnt);
 
+}
+static ssize_t msm_fb_encryption_store(struct device *dev, struct device_attribute *attr, 
+			const char *buf,size_t count)
+{
+	sscanf(buf, "%du", &msm_fb_encryption_cnt);
+	printk("msm_fb_encryption_cnt = %d\n",msm_fb_encryption_cnt);
+	return count;
+}
+#ifndef CONFIG_F_SKYDISP_LCD_FACTORY_REQUEST
+static DEVICE_ATTR(panel_power_on, S_IRUGO | S_IWUSR, msm_fb_check_panel_power_on,NULL);
+#endif
+static DEVICE_ATTR(encryption, S_IRUGO | S_IWUSR, msm_fb_encryption_show, msm_fb_encryption_store);
+#endif
+#ifdef CONFIG_F_SKYDISP_CABC_FIX
+static DEVICE_ATTR(cabc_ctl, S_IRUGO | S_IWUSR, msm_fb_cabc_show, msm_fb_cabc_store);
+#endif
 static DEVICE_ATTR(msm_fb_type, S_IRUGO, msm_fb_msm_fb_type, NULL);
+#ifdef CONFIG_LCD_DRIVER_STABILITY
+static DEVICE_ATTR(panel_wake, S_IRUGO | S_IWUSR, msm_fb_sleepNwakeup_show, msm_fb_sleepNwakeup_store);
+#endif
+#ifdef CONFIG_F_SKYDISP_ACL_FOR_AMOLED
+static DEVICE_ATTR(acl_ctl, S_IRUGO | S_IWUSR, msm_fb_acl_show, msm_fb_acl_store);
+static DEVICE_ATTR(acl_dat, S_IRUGO | S_IWUSR, msm_fb_acl_data_show, msm_fb_acl_data_store);
+#endif
+#ifdef CONFIG_ACL_FOR_RECOVERY
+static DEVICE_ATTR(recovery_ctl, S_IRUGO | S_IWUSR, msm_fb_recovery_show, msm_fb_recovery_store);
+#endif
 static struct attribute *msm_fb_attrs[] = {
 	&dev_attr_msm_fb_type.attr,
+#ifndef CONFIG_F_SKYDISP_LCD_FACTORY_REQUEST
+	&dev_attr_panel_power_on.attr,
+#endif
+#ifdef CONFIG_F_SKYDISP_FORCE_ENCRYPTION_OFF
+	&dev_attr_encryption.attr,
+#endif
+#ifdef CONFIG_F_SKYDISP_CABC_FIX
+	&dev_attr_cabc_ctl.attr,
+#endif
+#ifdef CONFIG_LCD_DRIVER_STABILITY
+	&dev_attr_panel_wake.attr,
+#endif
+#ifdef CONFIG_F_SKYDISP_ACL_FOR_AMOLED
+	&dev_attr_acl_ctl.attr,
+	&dev_attr_acl_dat.attr,
+#endif
+#ifdef CONFIG_ACL_FOR_RECOVERY
+	&dev_attr_recovery_ctl.attr,
+#endif
 	NULL,
 };
 static struct attribute_group msm_fb_attr_group = {
@@ -389,7 +684,17 @@ static int msm_fb_probe(struct platform_device *pdev)
 
 	vsync_cntrl.dev = mfd->fbi->dev;
 	mfd->panel_info.frame_count = 0;
-	mfd->bl_level = 0;
+#ifdef CONFIG_PANTECH_CHARGER_OFFLINE 
+        if(pantech_charging_status()) 
+	    mfd->bl_level = 1;
+        else
+#endif
+#if defined (CONFIG_MACH_MSM8960_EF45K) || defined (CONFIG_MACH_MSM8960_EF47S) ||defined (CONFIG_MACH_MSM8960_EF46L)
+         mfd->bl_level = 4; 
+#else
+         mfd->bl_level = 10; 
+	//mfd->bl_level = 0;
+#endif
 	bl_scale = 1024;
 	bl_min_lvl = 255;
 #ifdef CONFIG_FB_MSM_OVERLAY
@@ -419,6 +724,9 @@ static int msm_fb_probe(struct platform_device *pdev)
 
 	pdev_list[pdev_list_cnt++] = pdev;
 	msm_fb_create_sysfs(pdev);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+	dont_free_pipe_while_sub_blank_force=0;
+#endif	
 	return 0;
 }
 
@@ -515,6 +823,10 @@ static int msm_fb_suspend(struct platform_device *pdev, pm_message_t state)
 #define msm_fb_suspend NULL
 #endif
 
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+DEFINE_SEMAPHORE(msm_fb_onoff_sem);
+#endif
+
 static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd)
 {
 	int ret = 0;
@@ -525,6 +837,10 @@ static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd)
 	if (mfd->msmfb_no_update_notify_timer.function)
 		del_timer(&mfd->msmfb_no_update_notify_timer);
 	complete(&mfd->msmfb_no_update_notify);
+
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	down(&msm_fb_onoff_sem);
+#endif
 
 	/*
 	 * suspend this channel
@@ -567,6 +883,9 @@ static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd)
 			}
 		}
 	}
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	up(&msm_fb_onoff_sem);
+#endif
 
 	return 0;
 }
@@ -586,6 +905,10 @@ static int msm_fb_resume_sub(struct msm_fb_data_type *mfd)
 	if (mfd->channel_irq != 0)
 		enable_irq(mfd->channel_irq);
 
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	down(&msm_fb_onoff_sem);
+#endif
+
 	/* resume state var recover */
 	mfd->sw_refreshing_enable = mfd->suspend.sw_refreshing_enable;
 	mfd->op_enable = mfd->suspend.op_enable;
@@ -597,6 +920,9 @@ static int msm_fb_resume_sub(struct msm_fb_data_type *mfd)
 		if (ret)
 			MSM_FB_INFO("msm_fb_resume: can't turn on display!\n");
 	}
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	up(&msm_fb_onoff_sem);
+#endif
 
 	mfd->suspend.op_suspend = false;
 
@@ -666,6 +992,7 @@ static int msm_fb_ext_suspend(struct device *dev)
 		return 0;
 
 	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+
 	if (mfd->panel_info.type == HDMI_PANEL ||
 		mfd->panel_info.type == DTV_PANEL) {
 		ret = msm_fb_suspend_sub(mfd);
@@ -676,8 +1003,11 @@ static int msm_fb_ext_suspend(struct device *dev)
 					__func__);
 			pdata->power_ctrl(FALSE);
 		}
+		#ifdef CONFIG_PANTECH_MHL_SUSPEND_RESUME
+			mhl_power_ctrl(0);
+ 			mhl_gpio_free();
+		#endif
 	}
-
 	return ret;
 }
 
@@ -697,6 +1027,7 @@ static int msm_fb_ext_resume(struct device *dev)
 		return 0;
 
 	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	
 	if (mfd->panel_info.type == HDMI_PANEL ||
 		mfd->panel_info.type == DTV_PANEL) {
 		/* Turn on the HPD circuitry */
@@ -707,6 +1038,9 @@ static int msm_fb_ext_resume(struct device *dev)
 		}
 
 		ret = msm_fb_resume_sub(mfd);
+		#ifdef CONFIG_PANTECH_MHL_SUSPEND_RESUME
+ 			mhl_gpio_request();
+		#endif
 	}
 
 	return ret;
@@ -770,6 +1104,21 @@ static void msmfb_early_suspend(struct early_suspend *h)
 		memset32_io((void *)fbi->screen_base, 0x00, fbi->fix.smem_len);
 		break;
 	}
+#elif defined(CONFIG_MACH_MSM8960_STARQ)|| defined(CONFIG_MACH_MSM8960_EF45K) || \
+		defined(CONFIG_MACH_MSM8960_EF46L) || defined(CONFIG_MACH_MSM8960_EF47S)
+	struct fb_info *fbi = mfd->fbi;
+	memset((void*)fbi->screen_base, 0x0, fbi->fix.smem_len);
+/*#elif defined(CONFIG_MACH_MSM8960_OSCAR)
+	struct fb_info *fbi = mfd->fbi;
+	struct fb_fillrect rect;
+	rect.dx = rect.dy = 0;
+	rect.width = fbi->var.xres_virtual;
+	rect.height = fbi->var.yres_virtual;
+	rect.color = 0;
+	rect.rop = ROP_COPY;
+	msm_fb_fillrect(fbi,&rect);
+	printk("##\n");
+*/
 #endif
 	msm_fb_suspend_sub(mfd);
 
@@ -858,6 +1207,12 @@ void msm_fb_set_backlight(struct msm_fb_data_type *mfd, __u32 bkl_lvl)
 	}
 
 	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT //silent boot p13832@shji 		
+			if(backlight_value){
+				printk("[%s] First booting = %d\n",__func__,backlight_value);
+				return;
+			}
+#endif
 
 	if ((pdata) && (pdata->set_backlight)) {
 		msm_fb_scale_bl(&temp);
@@ -865,11 +1220,175 @@ void msm_fb_set_backlight(struct msm_fb_data_type *mfd, __u32 bkl_lvl)
 			return;
 		}
 		mfd->bl_level = temp;
+//#if defined(FEATURE_AARM_RELEASE_MODE) //user mode
+		//printk("[%s:ENTER] BL value : %d(%d) \n",__func__,bkl_lvl,temp);
+//#endif
 		pdata->set_backlight(mfd);
 		mfd->bl_level = bkl_lvl;
 		bl_level_old = temp;
 	}
 }
+
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+static void msm_fb_set_backlight_old(struct msm_fb_data_type *mfd, __u32 bkl_lvl, u32 save)
+{
+	struct msm_fb_panel_data *pdata;
+
+
+	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT //silent boot p13832@shji 		
+		if(backlight_value){
+			printk("[%s] First booting = %d\n",__func__,backlight_value);
+			return;
+		}
+#endif
+	if ((pdata) && (pdata->set_backlight)) {
+		down(&mfd->sem);
+		if ((bkl_lvl != mfd->bl_level) || (!save)) {
+			u32 old_lvl;
+
+			old_lvl = mfd->bl_level;
+			mfd->bl_level = bkl_lvl;
+			//if (mfd->panel_power_on)
+			pdata->set_backlight(mfd);
+
+			if (!save)
+				mfd->bl_level = old_lvl;
+		}
+		up(&mfd->sem);
+	}
+}
+#endif
+
+#if defined(CONFIG_F_SKYDISP_LCD_FORCE_ONOFF)
+#ifndef CONFIG_MACH_MSM8960_OSCAR
+enum {		
+	DSI_VIDEO_MODE,
+	DSI_CMD_MODE,
+}; 
+#endif
+
+#if defined(CONFIG_PANTECH_LCD_POWEROFFSEQ_ON_PHONEOFF) /* p13447 */
+struct msm_fb_data_type *mfd_tmp = NULL;
+
+void msm_fb_panel_power_off(void)
+{
+//	struct msm_panel_info *panel_info;
+	struct msm_fb_data_type *mfd;
+
+	if(mfd_tmp != NULL)
+	{
+	mfd = (struct msm_fb_data_type*)mfd_tmp;
+//	panel_info = &mfd->panel_info;
+	
+		if (mfd->panel_power_on) {
+               // msm_fb_blank_sub(FB_BLANK_POWERDOWN, info, mfd->op_enable);
+		printk("Panel Power Off In!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"); 
+			if(mfd)
+                msm_fb_blank_sub(FB_BLANK_POWERDOWN, mfd->fbi, mfd->op_enable);
+		}else
+			printk("Not Entry ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!\n"); 
+	}
+	
+}
+#endif
+// from mipi_dsi.h
+/* just force lcd on/off, no backlight control */
+static int msm_fb_blank_sub_force(int onoff, struct fb_info *info, int bl)
+{
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+	struct msm_fb_panel_data *pdata = NULL;
+	int ret = 0;
+
+	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+	if ((!pdata) || (!pdata->on) || (!pdata->off)) {
+		printk(KERN_ERR "msm_fb_blank_sub_force: no panel operation detected!\n");
+		return -ENODEV;
+	}
+
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	down(&msm_fb_onoff_sem);
+#endif
+
+	printk(" msm_fb_blank_sub_force: onoff=%d, mfd->panel_power_on=%d\n",
+			onoff, mfd->panel_power_on);
+	if (onoff) {
+		if (!mfd->panel_power_on) {
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE			
+			msleep(16);
+			ret = pdata->on(mfd->pdev);
+			if (ret == 0) {
+				mfd->panel_power_on = TRUE;
+				msleep(16);
+				if (bl == 1) {
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+					msm_fb_set_backlight_old(mfd, mfd->bl_level, 0);
+#endif
+				}
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				msm_fb_pan_display(&info->var,info);
+				msm_fb_set_backlight_old(mfd,0, 0);
+				msm_fb_set_backlight_old(mfd, 5, 0);
+#endif
+
+			}
+#else
+		struct msm_panel_info *panel_info = &mfd->panel_info;
+		msm_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable);
+			if (panel_info->mipi.mode == DSI_VIDEO_MODE)
+				msm_fb_pan_display(&info->var,info);
+				//mdp4_dsi_video_overlay(mfd);
+			else
+				mdp4_dsi_cmd_overlay(mfd);
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				msm_fb_set_backlight_old(mfd,0, 0);
+				msm_fb_set_backlight_old(mfd, 5, 0);
+#else
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+               msm_fb_set_backlight_old(mfd, mfd->bl_level, 0);
+#else
+				msm_fb_set_backlight(mfd, mfd->bl_level);
+#endif		
+#endif			
+#endif			
+		}
+		
+	} else {
+		if (mfd->panel_power_on) {
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE			
+			int curr_pwr_state;
+
+			//mfd->op_enable = FALSE;
+			curr_pwr_state = mfd->panel_power_on;
+			mfd->panel_power_on = FALSE;
+
+			if (bl == 1) {
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+				msm_fb_set_backlight_old(mfd, 0, 0);
+#endif
+			}
+			msleep(16);
+			ret = pdata->off(mfd->pdev);
+			if (ret)
+				mfd->panel_power_on = curr_pwr_state;
+
+			//mfd->op_enable = TRUE;
+#else
+		msm_fb_blank_sub(FB_BLANK_POWERDOWN, info, mfd->op_enable);
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+             msm_fb_set_backlight_old(mfd, 0, 0);
+#else
+              msm_fb_set_backlight(mfd, 0);
+#endif
+#endif
+        }
+    }
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	up(&msm_fb_onoff_sem);
+#endif	
+	return ret;
+}
+#endif
 
 static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			    boolean op_enable)
@@ -887,13 +1406,54 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 		return -ENODEV;
 	}
 
+	printk(KERN_INFO " msm_fb_blank_sub: blank_mode=%d, mfd->panel_power_on=%d\n",
+			blank_mode, mfd->panel_power_on);
+
+#if defined(CONFIG_MACH_MSM8960_STARQ) 
+	if (first_boot_flags) 
+	{
+	     bl_updated = 1;
+	     msm_fb_set_backlight(mfd, mfd->bl_level);
+	     bl_updated = 0;
+     	     if(pantech_charging_status()) 
+                unset_bl_level =1;
+     	     else
+	        unset_bl_level =5; 
+
+	     first_boot_flags = 0;
+	}
+#endif
 	switch (blank_mode) {
+//#ifndef T_STARQ 
 	case FB_BLANK_UNBLANK:
 		if (!mfd->panel_power_on) {
 			msleep(16);
+#if defined(CONFIG_PANTECH_LCD_POWEROFFSEQ_ON_PHONEOFF) 
+                     if(mfd->index == 0)
+			mfd_tmp = (struct msm_fb_data_type *)mfd;
+#endif
 			ret = pdata->on(mfd->pdev);
 			if (ret == 0) {
 				mfd->panel_power_on = TRUE;
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+			Oscar_State.backlight_control = true;	
+			msm_fb_set_backlight_old(mfd, 0, 0);
+			
+			if(Oscar_State.firstCnt == false && Oscar_State.backlight_control == true)
+			{
+				Oscar_State.firstCnt = true;
+				msm_fb_pan_display(&info->var,info);
+
+				msleep(20);
+				msm_fb_set_backlight_old(mfd, 0, 0);
+				pr_info("Oscar first booting check\n");
+			}
+#endif
+
+
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT //silent boot p13832@shji 		
+				sky_sys_rst_is_silent_boot_backlight(TRUE);
+#endif
 
 /* ToDo: possible conflict with android which doesn't expect sw refresher */
 /*
@@ -924,13 +1484,27 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			bl_updated = 0;
 
 			msleep(16);
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+			Oscar_State.backlight_control = true;	
+#ifdef CONFIG_F_SKYDISP_QBUG_FIX_BACKLIGHT
+			msm_fb_set_backlight_old(mfd, 0, 0);
+#endif            
+#endif
 			ret = pdata->off(mfd->pdev);
 			if (ret)
 				mfd->panel_power_on = curr_pwr_state;
 
 			mfd->op_enable = TRUE;
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT	//silent boot p13832@shji 		
+			sky_sys_rst_is_silent_boot_backlight(FALSE);	//chjeon20120311@LS1 chg
+			//sky_sys_rst_is_silent_boot_for_test(FALSE,FALSE);
+			backlight_value =0;
+		
+#endif
+
 		}
 		break;
+//#endif 
 	}
 
 	return ret;
@@ -1104,7 +1678,11 @@ static struct fb_ops msm_fb_ops = {
 	.fb_release = msm_fb_release,
 	.fb_read = NULL,
 	.fb_write = NULL,
+#ifndef CONFIG_F_SKYDISP_NO_CURSOR_IN_BOOT
 	.fb_cursor = NULL,
+#else
+	.fb_cursor = msm_fb_cursor_dummy,   // lived for delete cursor
+#endif
 	.fb_check_var = msm_fb_check_var,	/* vinfo check */
 	.fb_set_par = msm_fb_set_par,	/* set the video mode according to info->var */
 	.fb_setcolreg = NULL,	/* set color register */
@@ -1162,8 +1740,19 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	var->grayscale = 0,	/* No graylevels */
 	var->nonstd = 0,	/* standard pixel format */
 	var->activate = FB_ACTIVATE_VBL,	/* activate it at vsync */
+#if defined (CONFIG_MACH_MSM8960_EF45K) || defined (CONFIG_MACH_MSM8960_EF47S) ||defined (CONFIG_MACH_MSM8960_EF46L)
+	var->height = 105,	/* height of picture in mm */
+	var->width = 59,	/* width of picture in mm */	
+#elif defined (CONFIG_MACH_MSM8960_STARQ) 
+	var->height = 82,	/* height of picture in mm */
+	var->width = 49,	/* width of picture in mm */
+#elif defined (CONFIG_MACH_MSM8960_OSCAR)	
+	var->height = 95,	/* height of picture in mm */
+	var->width = 53,	/* width of picture in mm */
+#else
 	var->height = -1,	/* height of picture in mm */
 	var->width = -1,	/* width of picture in mm */
+#endif
 	var->accel_flags = 0,	/* acceleration flags */
 	var->sync = 0,	/* see FB_SYNC_* */
 	var->rotate = 0,	/* angle we rotate counter clockwise */
@@ -1497,10 +2086,120 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	    ("FrameBuffer[%d] %dx%d size=%d bytes is registered successfully!\n",
 	     mfd->index, fbi->var.xres, fbi->var.yres, fbi->fix.smem_len);
 
+#ifdef CONFIG_MACH_MSM8960_STARQ
+if(sky_sys_rst_is_silent_boot_mode()){ // if value is 1, silent boot
+		if(!sky_sys_rst_is_backlight_off()){// if value is 0, backlight off
+			backlight_value = 1;
+			printk(KERN_WARNING"[%s]value of sky_sys_rst_is_backlight_off = %d\n",__func__,backlight_value);
+		}else
+			backlight_value = 0;
+}else
+	backlight_value = 0;
+
+#endif	
+#if defined(CONFIG_F_SKYDISP_BOOT_LOGO_IN_KERNEL) && defined(CONFIG_FB_MSM_LOGO)
+#if defined(CONFIG_MACH_MSM8960_CHEETAH) || defined(CONFIG_MACH_MSM8960_STARQ) || \
+	defined(CONFIG_MACH_MSM8960_EF45K) || defined(CONFIG_MACH_MSM8960_EF46L) ||\
+	defined (CONFIG_MACH_MSM8960_EF47S) || defined(CONFIG_MACH_MSM8960_OSCAR)
+
+#ifdef CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN
+	if (mfd->index == 0)
+	{
+#endif
+	
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT	
+	if(sky_sys_rst_is_silent_boot_mode()){ // if value is 1, silent boot
+		if(!sky_sys_rst_is_backlight_off()){// if value is 0, backlight off
+			backlight_value = 1;
+			printk(KERN_WARNING"[%s]value of sky_sys_rst_is_backlight_off = %d\n",__func__,backlight_value);
+		}
+		else{
+#if defined(CONFIG_MACH_MSM8960_EF45K) || defined(CONFIG_MACH_MSM8960_EF46L)||defined(CONFIG_MACH_MSM8960_EF47S)
+			ret = load_565rle_image(INIT_RESET_IMAGE_FILE, bf_supported);
+#else
+		ret = load_565rle_image(INIT_IMAGE_FILE, bf_supported); 
+#endif
+		if (!ret) 
+		{
+			if(msm_fb_blank_sub(FB_BLANK_UNBLANK, fbi, true)) {
+				printk(KERN_ERR "[%s] msm_fb_register : can`t turn on display!\n",__func__);
+			}
+		}
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+			ret = load_565rle_image(INIT_IMAGE_FILE, bf_supported);
+#endif
+			backlight_value = 0;
+			printk(KERN_WARNING"[%s]value of sky_sys_rst_is_backlight_on = %d\n",__func__,backlight_value);
+		}
+		
+	}
+	else
+#endif
+	{
+#ifdef CONFIG_PANTECH_CHARGER_OFFLINE 
+                if(pantech_charging_status()) {
+                  ret = load_565rle_image(BATT_CHARGING_IN, bf_supported); 
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				  Oscar_State.chargerFlag = true;
+#endif
+#if defined(CONFIG_MACH_MSM8960_EF45K) || defined(CONFIG_MACH_MSM8960_EF46L) ||\
+	defined (CONFIG_MACH_MSM8960_EF47S)
+				charger_flag = true;
+#endif
+				}
+                else     
+#endif   
+		ret = load_565rle_image(INIT_IMAGE_FILE, bf_supported);
+		if (!ret) 
+		{
+			if(msm_fb_blank_sub(FB_BLANK_UNBLANK, fbi, true)) {
+				printk(KERN_ERR "[%s] msm_fb_register : can`t turn on display!\n",__func__);
+			}
+#ifdef CONFIG_MACH_MSM8960_OSCAR
+				  if(Oscar_State.chargerFlag == 1)
+				  	ret = load_565rle_image(BATT_CHARGING_IN, bf_supported); 
+				  else
+				  	ret = load_565rle_image(INIT_IMAGE_FILE, bf_supported);
+#endif
+#if defined(CONFIG_MACH_MSM8960_EF45K) || defined(CONFIG_MACH_MSM8960_EF46L) ||\
+	defined (CONFIG_MACH_MSM8960_EF47S)	
+				if(charger_flag == 1)
+				  	ret = load_565rle_image(BATT_CHARGING_IN, bf_supported); 
+				else
+				  	ret = load_565rle_image(INIT_IMAGE_FILE, bf_supported);
+#endif
+		}
+#ifdef CONFIG_F_SKYDISP_SILENT_BOOT	
+				backlight_value = 0;
+#endif
+	}
+#if defined (CONFIG_MACH_MSM8960_OSCAR) 		
+	mdp_set_dma_pan_info(fbi, NULL, TRUE);
+    mdp_dma_pan_update(fbi);
+#endif
+
+	if (panel_info->mipi.mode == DSI_VIDEO_MODE)
+		mdp4_dsi_video_overlay(mfd);
+	else
+		mdp4_dsi_cmd_overlay(mfd);
+
+//20130123_ejkim_recovery_image_display
+	bl_updated = 1;
+	msm_fb_set_backlight(mfd, mfd->bl_level);
+	bl_updated = 0;
+	       if(pantech_charging_status()) 
+	            unset_bl_level =1;
+	       else
+		     unset_bl_level =5; 
+		   
+#ifdef CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN
+	}
+#endif
+#else
 #ifdef CONFIG_FB_MSM_LOGO
-	/* Flip buffer */
-	if (!load_565rle_image(INIT_IMAGE_FILE, bf_supported))
-		;
+	if (!load_565rle_image(INIT_IMAGE_FILE, bf_supported)) ;	/* Flip buffer */
+#endif
+#endif /* cheetah */
 #endif
 	ret = 0;
 
@@ -1659,18 +2358,32 @@ static int msm_fb_open(struct fb_info *info, int user)
 			return 0;
 	}
 
+#ifdef CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN
+	if (!mfd->ref_cnt && mfd->index ==0) {
+#else
 	if (!mfd->ref_cnt) {
+#endif
 		if (!bf_supported ||
 			(info->node != 1 && info->node != 2))
 			mdp_set_dma_pan_info(info, NULL, TRUE);
 		else
 			pr_debug("%s:%d no mdp_set_dma_pan_info %d\n",
 				__func__, __LINE__, info->node);
-
+#ifdef CONFIG_PANTECH_MHL_CABLE_DETECT
+    if (mfd->panel_info.type != DTV_PANEL){		
 		if (msm_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable)) {
+			printk("[%s:Error]op_enable = %d\n",__func__,mfd->op_enable);
 			printk(KERN_ERR "msm_fb_open: can't turn on display!\n");
 			return -1;
 		}
+	}
+#else
+		if (msm_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable)) {
+			printk("[%s:Error]op_enable = %d\n",__func__,mfd->op_enable);
+			printk(KERN_ERR "msm_fb_open: can't turn on display!\n");
+			return -1;
+		}
+#endif
 	}
 
 	mfd->ref_cnt++;
@@ -1690,10 +2403,26 @@ static int msm_fb_release(struct fb_info *info, int user)
 
 	mfd->ref_cnt--;
 
-	if (!mfd->ref_cnt) {
+//#if defined(CONFIG_F_SKYDISP_BOOT_LOGO_IN_KERNEL)
+#if defined(CONFIG_PANTECH_DONOT_POWER_ON_HDMI_AT_FB_OPEN) && defined(CONFIG_F_SKYDISP_BOOT_LOGO_IN_KERNEL)
+//	if ((!mfd->ref_cnt && !no_release_first) || (!mfd->ref_cnt && mfd->index == 1) || (!mfd->ref_cnt && mfd->index ==2)) 
+	if ((!mfd->ref_cnt) || (!mfd->ref_cnt && mfd->index == 1) || (!mfd->ref_cnt && mfd->index ==2)) 
+#else
+	if (!mfd->ref_cnt) 
+#endif
+	{
+
+#ifdef CONFIG_F_SKYDISP_FORCE_ENCRYPTION_OFF
+	if(msm_fb_encryption_cnt == 1){
+		//msm_fb_encryption_cnt =0;
+		return 0;
+
+	}
+#endif
 		if ((ret =
 		     msm_fb_blank_sub(FB_BLANK_POWERDOWN, info,
 				      mfd->op_enable)) != 0) {
+			printk("[%s:Error]op_enable = %d\n",__func__,mfd->op_enable);
 			printk(KERN_ERR "msm_fb_release: can't turn off display!\n");
 			return ret;
 		}
@@ -1798,7 +2527,6 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 	mutex_unlock(&msm_fb_notify_update_sem);
 
 	down(&msm_fb_pan_sem);
-
 	if (info->node == 0 && !(mfd->cont_splash_done)) { /* primary */
 		mdp_set_dma_pan_info(info, NULL, TRUE);
 		if (msm_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable)) {
@@ -1806,12 +2534,10 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 			return -EINVAL;
 		}
 	}
-
 	mdp_set_dma_pan_info(info, dirtyPtr,
 			     (var->activate == FB_ACTIVATE_VBL));
 	mdp_dma_pan_update(info);
 	up(&msm_fb_pan_sem);
-
 	if (unset_bl_level && !bl_updated)
 		schedule_delayed_work(&mfd->backlight_worker,
 				backlight_duration);
@@ -3328,6 +4054,27 @@ static int msmfb_handle_pp_ioctl(struct msm_fb_data_type *mfd,
 	return ret;
 }
 
+#if defined(CONFIG_QUALCOMM_BUG_FIX_BLENDING)
+static int msmfb_handle_metadata_ioctl(struct msm_fb_data_type *mfd,
+				struct msmfb_metadata *metadata_ptr)
+{
+	int ret;
+	switch (metadata_ptr->op) {
+#ifdef CONFIG_FB_MSM_MDP40
+	case metadata_op_base_blend:
+		ret = mdp4_update_base_blend(mfd,
+						&metadata_ptr->data.blend_cfg);
+		break;
+#endif
+	default:
+		pr_warn("Unsupported request to MDP META IOCTL.\n");
+		ret = -EINVAL;
+		break;
+	}
+	return ret;
+}
+#endif
+
 static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
@@ -3345,7 +4092,16 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 #endif
 	struct mdp_page_protection fb_page_protection;
 	struct msmfb_mdp_pp mdp_pp;
+#if defined(CONFIG_QUALCOMM_BUG_FIX_BLENDING)
+	struct msmfb_metadata mdp_metadata;
+#endif
 	int ret = 0;
+#if defined(CONFIG_F_SKYDISP_LCD_FORCE_ONOFF) ||defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	boolean	enable;
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	struct msmfb_veil_view veil;
+#endif    
+#endif    
 
 	switch (cmd) {
 #ifdef CONFIG_FB_MSM_OVERLAY
@@ -3630,7 +4386,101 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 
 		ret = msmfb_handle_pp_ioctl(mfd, &mdp_pp);
 		break;
+#ifdef CONFIG_F_SKYDISP_LCD_RESET
+	case MSMFB_SKY_LCD_RESET_INIT:
+		printk(KERN_INFO "[LIVED] LCD reset initialization\n");
+		down(&msm_fb_ioctl_ppp_sem);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=1;
+#endif		
+		msm_fb_blank_sub_force(0, info, 1);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=0;
+#endif
+		// Need Real GPIO LCD reset? do not need right now...
+		msm_fb_blank_sub_force(1, info, 1);
+		up(&msm_fb_ioctl_ppp_sem);
+		break;
+#endif
 
+#ifdef CONFIG_F_SKYDISP_LCD_FORCE_ONOFF
+	case MSMFB_SKY_LCD_FORCE_ONOFF:
+		ret = copy_from_user(&enable, argp, sizeof(enable));
+		printk(KERN_INFO "[LIVED] LCD force onoff=%d\n", enable);
+		down(&msm_fb_ioctl_ppp_sem);
+		msm_fb_blank_sub_force(enable, info, 1);
+		up(&msm_fb_ioctl_ppp_sem);
+		break;
+#endif
+#ifdef CONFIG_F_SKYDISP_SMART_DIMMING
+	case MSMFB_SKY_LCD_SMART_DIMMING_READ:
+		down(&msm_fb_ioctl_ppp_sem);
+
+		if(copy_to_user(argp,Oscar_State.mtp_buffer,sizeof(Oscar_State.mtp_buffer))){
+			printk(KERN_ERR "%s: copy2user failed \n",
+			__func__);
+			return -EFAULT;
+		}
+		up(&msm_fb_ioctl_ppp_sem);
+		break;
+	case MSMFB_SKY_LCD_SMART_DIMMING_WRITE:
+		down(&msm_fb_ioctl_ppp_sem);
+
+		if(copy_from_user(Oscar_State.gamma_buffer,argp,sizeof(Oscar_State.gamma_buffer))){
+			printk(KERN_ERR "%s: copy2user failed \n",
+				__func__);
+				return -EFAULT;
+		}
+		up(&msm_fb_ioctl_ppp_sem);
+		mtp_write();
+
+	break;
+	
+#endif
+#if defined(CONFIG_QUALCOMM_BUG_FIX_BLENDING)
+	case MSMFB_METADATA_SET:
+		ret = copy_from_user(&mdp_metadata, argp, sizeof(mdp_metadata));
+		if (ret)
+			return ret;
+		ret = msmfb_handle_metadata_ioctl(mfd, &mdp_metadata);
+		break;
+#endif
+
+
+#if defined(CONFIG_F_SKYDISP_VEIL_VIEW) 
+	case MSMFB_SKY_VEIL_ENABLE:
+		ret = copy_from_user(&enable, argp, sizeof(enable));
+		printk(KERN_INFO "[LIVED] veil enable/disable enable=%d\n", enable);
+		down(&msm_fb_ioctl_ppp_sem);
+		mipi_rohm_veil_mode(enable);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=1;
+#endif				
+		msm_fb_blank_sub_force(0, info, 1);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=0;
+#endif				
+		msm_fb_blank_sub_force(1, info, 1);
+		up(&msm_fb_ioctl_ppp_sem);
+		break;
+	case MSMFB_SKY_VEIL_SET:
+		ret = copy_from_user(&veil, argp, sizeof(veil));
+		printk(KERN_INFO "[LIVED] veil set\n");
+		down(&msm_fb_ioctl_ppp_sem);
+		ret = mipi_rohm_veil_set(veil);
+		if (ret == 1) {
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=1;
+#endif					
+			msm_fb_blank_sub_force(0, info, 1);
+#ifdef CONFIG_F_SKYDISP_DONOT_FREE_PIPE_SUB_BLANK_FORCE
+		dont_free_pipe_while_sub_blank_force=0;
+#endif					
+			msm_fb_blank_sub_force(1, info, 1);
+		}
+		up(&msm_fb_ioctl_ppp_sem);
+		break;
+#endif
 	default:
 		MSM_FB_INFO("MDP: unknown ioctl (cmd=%x) received!\n", cmd);
 		ret = -EINVAL;
